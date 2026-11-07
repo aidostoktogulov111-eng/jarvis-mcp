@@ -1,3 +1,25 @@
+<p align="center"><b>Jarvis</b> — a self-hosted MCP server that lets Claude work with files on your Windows PC from chat, phone or voice mode.</p>
+
+<p align="center">
+<img alt="Python" src="https://img.shields.io/badge/python-3.12%2B-blue">
+<img alt="Platform" src="https://img.shields.io/badge/platform-Windows-lightgrey">
+<img alt="MCP" src="https://img.shields.io/badge/MCP-server-8A2BE2">
+<img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+</p>
+
+## English summary
+
+**Jarvis** is a remote [Model Context Protocol](https://modelcontextprotocol.io) connector for [Claude](https://claude.ai). It runs on your own Windows computer and is exposed through an ngrok tunnel, so Claude can list, read, search and write files in folders you allow, and run commands only after you press **Allow** in the chat.
+
+- **Read anything useful:** text, Excel, Word, PDF, DBF, zip listings; large files in chunks.
+- **Safe by default:** password login (OAuth, hashed), folder whitelist, read-only folders, automatic backups before overwrite, no delete tool, action log.
+- **Confirm from your phone:** commands and writes ask for approval in the Claude chat.
+- **Optional:** read-only WhatsApp integration (unofficial, use at your own risk).
+
+Quick start (Windows): install Python 3.12+, create a free ngrok account with a static domain, download this repo, run `1_ustanovka.bat`, then `2_zapusk.bat`, and add `https://<your-domain>/mcp` as a custom connector in Claude. Detailed instructions below are in Russian.
+
+---
+
 # «Jarvis для Claude»: свой коннектор к компьютеру
 
 Это свой MCP-сервер. Он даёт Claude доступ к вашему компьютеру из чата, с телефона и, если поддерживается, из голосового режима. Работает он так:
@@ -20,6 +42,7 @@ Claude (облако) → https://ваш-адрес.ngrok-free.dev/mcp → ту�
 | `search_files` | ищет файлы по маске (`*.xlsx`, `*Талас*`) и по тексту внутри |
 | `write_file` | записывает файл; если файл уже есть, сначала делает резервную копию |
 | `run_command` | выполняет команду или скрипт Python, **только после вашей кнопки «Разрешить» в чате** |
+| `wa_status`, `wa_messages`, `wa_files` | WhatsApp (по желанию, `WHATSAPP_PODKLYUCHIT.bat`): только чтение сообщений и скачанных файлов, без отправки. Подключение неофициальное (как связанное устройство) — есть риск блокировки номера |
 
 
 ## Защита
@@ -106,6 +129,10 @@ Claude (облако) → https://ваш-адрес.ngrok-free.dev/mcp → ту�
 ## Безопасность репозитория
 
 `config.json` (пароль, токен ngrok) и папка `data\` (выданные доступы) **не загружаются на GitHub** — они в `.gitignore`. Шаблон настроек — `config.example.json`. Никогда не выкладывайте свой `config.json`.
+
+## Лицензия
+
+MIT — см. файл [LICENSE](LICENSE). Используете на свой риск: сервер даёт удалённый доступ к вашему компьютеру.
 
 ## Контакты
 
