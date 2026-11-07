@@ -128,12 +128,14 @@ class Store:
 
     def __init__(self) -> None:
         self.clients: dict[str, dict] = {}
+        self.owner: list[str] = []
         self.access: dict[str, dict] = {}
         self.refresh: dict[str, dict] = {}
         if STATE_PATH.exists():
             try:
                 d = json.loads(STATE_PATH.read_text(encoding="utf-8"))
                 self.clients, self.access, self.refresh = d["clients"], d["access"], d["refresh"]
+                self.owner = d.get("owner") or sorted({v["client_id"] for v in self.refresh.values()})
             except Exception:  # повреждённый файл — начинаем заново
                 pass
         self.codes: dict[str, AuthorizationCode] = {}
@@ -146,14 +148,20 @@ class Store:
         with _state_lock:
             tmp = STATE_PATH.with_suffix(".tmp")
             tmp.write_text(
-                json.dumps({"clients": self.clients, "access": self.access, "refresh": self.refresh}, ensure_ascii=False),
+                json.dumps({"clients": self.clients, "access": self.access, "refresh": self.refresh,
+                            "owner": self.owner}, ensure_ascii=False),
                 encoding="utf-8",
             )
             os.replace(tmp, STATE_PATH)
 
 
 STORE = Store()
-_login_fail: list[float] = []
+_login_fail: dict[str, list[float]] = {}
+_login_fail_all: list[float] = []
+
+
+def owner_clients() -> list[str]:
+    return STORE.owner
 
 
 class SingleUserOAuth:
@@ -162,6 +170,11 @@ class SingleUserOAuth:
         return OAuthClientInformationFull.model_validate(c) if c else None
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        if STORE.owner:
+            audit("REGISTER_REJECTED_OWNER_LOCK", name=client_info.client_name or "")
+            raise RegistrationError(error="invalid_client_metadata",
+                                    error_description="Сервер уже привязан к владельцу. "
+                                    "Чтобы привязать заново, запустите PRIVYAZAT_ZANOVO.bat на компьютере.")
         allowed = CFG["allowed_redirect_uris"]
         for uri in client_info.redirect_uris or []:
             if str(uri) not in allowed:
@@ -174,6 +187,9 @@ class SingleUserOAuth:
         audit("CLIENT_REGISTERED", name=client_info.client_name or "", client_id=client_info.client_id)
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
+        if STORE.owner and client.client_id not in STORE.owner:
+            audit("AUTHORIZE_REJECTED_OWNER_LOCK", client_id=client.client_id)
+            raise PermissionError("Сервер привязан к другому владельцу")
         req = secrets.token_urlsafe(24)
         STORE.pending[req] = (client.client_id, params, time.time() + 600)
         return f"{CFG['public_url']}/login?req={req}"
@@ -214,7 +230,7 @@ class SingleUserOAuth:
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         a = STORE.access.get(_sha(token))
-        if a and a["expires_at"] > time.time():
+        if a and a["expires_at"] > time.time() and (not STORE.owner or a["client_id"] in STORE.owner):
             return AccessToken(token=token, client_id=a["client_id"], scopes=a["scopes"],
                                expires_at=a["expires_at"], resource=a.get("resource"))
         return None
@@ -268,13 +284,23 @@ async def login(request: Request) -> Response:
         form = await request.form()
         req, pw = str(form.get("req", "")), str(form.get("password", ""))
         now = time.time()
-        _login_fail[:] = [t for t in _login_fail if now - t < 900]
-        if len(_login_fail) >= 5:
-            audit("LOGIN_LOCKED")
+        ip = request.client.host if request.client else "?"
+        lst = [t for t in _login_fail.get(ip, []) if now - t < 900]
+        _login_fail[ip] = lst
+        _login_fail_all[:] = [t for t in _login_fail_all if now - t < 900]
+        if len(lst) >= 5 or len(_login_fail_all) >= 30:
+            audit("LOGIN_LOCKED", ip=ip)
             return HTMLResponse("<h3>Слишком много неверных попыток. Подождите 15 минут.</h3>", status_code=429)
         pend = STORE.pending.get(req)
+        if pend and STORE.owner and pend[0] not in STORE.owner:
+            audit("LOGIN_REJECTED_OWNER_LOCK", ip=ip)
+            return HTMLResponse("<h3>Этот сервер уже привязан к владельцу. Доступ запрещён.</h3>", status_code=403)
         if pend and pend[2] > now and check_password(pw):
             client_id, params, _ = STORE.pending.pop(req)
+            if not STORE.owner:
+                STORE.owner = [client_id]
+                STORE.save()
+                audit("OWNER_BOUND", client_id=client_id)
             code = secrets.token_urlsafe(32)
             STORE.codes[code] = AuthorizationCode(
                 code=code, scopes=params.scopes or [], expires_at=now + 300, client_id=client_id,
@@ -282,12 +308,13 @@ async def login(request: Request) -> Response:
                 redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
                 resource=params.resource, subject="owner",
             )
-            audit("LOGIN_OK", client_id=client_id, ip=request.client.host if request.client else "")
+            audit("LOGIN_OK", client_id=client_id, ip=ip)
             return RedirectResponse(
                 construct_redirect_uri(str(params.redirect_uri), code=code, state=params.state), status_code=302
             )
-        _login_fail.append(now)
-        audit("LOGIN_FAIL", ip=request.client.host if request.client else "")
+        lst.append(now)
+        _login_fail_all.append(now)
+        audit("LOGIN_FAIL", ip=ip)
         error = "Неверный пароль или ссылка устарела (начните подключение заново)."
     pend = STORE.pending.get(req)
     client = "неизвестно"
@@ -364,7 +391,11 @@ _confirm_lock = asyncio.Lock()
 
 async def confirm(action: str, details: str) -> bool:
     if CFG["confirm_mode"] == "chat":
-        # подтверждение делает сам Claude: у инструмента стоит «Спрашивать» в настройках коннектора
+        if not action.startswith("Выполнить команду"):
+            # запись вне белого списка без человека у ПК не разрешаем никогда
+            audit("CONFIRM_DENY_OUTSIDE_WHITELIST", what=action, details=details)
+            return False
+        # команды: подтверждение делает Claude (у run_command в коннекторе должно стоять «Спрашивать»)
         audit("CONFIRM_IN_CHAT", what=action, details=details)
         return True
     if CFG["confirm_mode"] != "popup":
@@ -579,7 +610,7 @@ def search_files(folder: str, pattern: str = "*", contains: str | None = None, m
 @tool
 async def write_file(path: str, content: str, encoding: str = "utf-8") -> str:
     """Записать текстовый файл. Если файл уже есть — сначала делается резервная копия.
-    В защищённые папки (read_only_folders) писать нельзя. Запись вне белого списка — только с подтверждением на ПК."""
+    В защищённые папки (read_only_folders) писать нельзя. Запись вне белого списка запрещена (в режиме popup — с подтверждением на ПК)."""
     p = _norm(path)
     reason = needs_confirm_for_write(p)
     if reason and not await confirm("Запись файла (" + reason + ")", p):
@@ -602,6 +633,9 @@ async def write_file(path: str, content: str, encoding: str = "utf-8") -> str:
 async def run_command(command: str, cwd: str | None = None, timeout_sec: int = 120) -> str:
     """Выполнить команду Windows (cmd) или скрипт, например: python C:\\...\\script.py.
     Каждая команда выполняется ТОЛЬКО после того, как человек нажмёт «Да» в окне на ПК."""
+    if not CFG.get("allow_commands", False):
+        return ("Выполнение команд выключено. Чтобы включить, поставьте \"allow_commands\": true "
+                "в config.json и перезапустите сервер.")
     workdir = str(resolve_read(cwd)) if cwd else None
     if not await confirm("Выполнить команду", f"{command}\n\nПапка: {workdir or '(по умолчанию)'}"):
         return "Отклонено: на компьютере не подтвердили команду (или никого нет у ПК)."

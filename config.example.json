@@ -13,5 +13,6 @@
   "backup_dir": "C:\\Jarvis\\backups",
   "confirm_mode": "chat",
   "confirm_timeout_sec": 60,
-  "ngrok_authtoken": ""
+  "ngrok_authtoken": "",
+  "allow_commands": false
 }
