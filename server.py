@@ -106,6 +106,84 @@ def audit(event: str, **kw: Any) -> None:
 
 
 # ----------------------------------------------------------------------------
+# Попытки подключения: журнал, окно на ПК, предупреждение в Claude
+# ----------------------------------------------------------------------------
+ATTEMPTS_PATH = DATA_DIR / "attempts.jsonl"
+_attempts_lock = threading.Lock()
+EVENT_RU = {
+    "REGISTER_REJECTED_OWNER_LOCK": "Чужой Claude пытался зарегистрироваться (отклонено)",
+    "AUTHORIZE_REJECTED_OWNER_LOCK": "Чужой Claude пытался начать вход (отклонено)",
+    "LOGIN_REJECTED_OWNER_LOCK": "Попытка войти на сервер, привязанный к владельцу (отклонено)",
+    "LOGIN_FAIL": "Неверный пароль",
+    "LOGIN_LOCKED": "Блокировка: слишком много неверных паролей",
+    "OWNER_BOUND": "Сервер привязан к новому владельцу",
+}
+
+
+def _geo(ip: str) -> str:
+    if not ip or ip.startswith(("127.", "10.", "192.168.", "::1")) or ip == "?":
+        return ""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(
+                f"http://ip-api.com/json/{ip}?lang=ru&fields=status,country,regionName,city,isp", timeout=3) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        if d.get("status") == "success":
+            return ", ".join(x for x in (d.get("country"), d.get("regionName"), d.get("city"), d.get("isp")) if x)
+    except Exception:
+        pass
+    return ""
+
+
+def _popup(text: str) -> None:
+    if not IS_WINDOWS or not CFG.get("alert_popup", True):
+        return
+    def run():
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, text, "Jarvis — попытка подключения", 0x30 | 0x40000 | 0x1000)
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True).start()
+
+
+async def alert(event: str, request: Request | None = None, **kw) -> None:
+    ip = (request.client.host if request and request.client else "") or ""
+    ua = request.headers.get("user-agent", "") if request else ""
+    geo = await asyncio.to_thread(_geo, ip)
+    rec = {"time": datetime.now().strftime("%d.%m.%Y %H:%M:%S"), "event": event, "what": EVENT_RU.get(event, event),
+           "ip": ip or "через серверы Claude", "where": geo, "browser": ua[:200], "seen": False}
+    rec.update({k: str(v)[:200] for k, v in kw.items()})
+    with _attempts_lock:
+        with open(ATTEMPTS_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    _popup(f"{rec['what']}\n\nВремя: {rec['time']}\nIP: {rec['ip']}\nОткуда: {geo or 'неизвестно'}\n"
+           f"Браузер: {ua[:120] or '—'}\n\nЕсли это не вы — запустите 5_OTKLYUCHIT_VSYO.bat")
+
+
+def _read_attempts() -> list[dict]:
+    if not ATTEMPTS_PATH.exists():
+        return []
+    out = []
+    for line in ATTEMPTS_PATH.read_text(encoding="utf-8").splitlines():
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            pass
+    return out
+
+
+def unseen_banner() -> str:
+    new = [a for a in _read_attempts() if not a.get("seen")]
+    if not new:
+        return ""
+    last = new[-1]
+    return (f"⚠ ВНИМАНИЕ ВЛАДЕЛЬЦУ: {len(new)} новых попыток подключения к серверу. Последняя: {last['time']}, "
+            f"{last['what']}, IP {last['ip']} {('(' + last['where'] + ')') if last.get('where') else ''}. "
+            "Сообщите пользователю и покажите подробности инструментом access_attempts.\n\n")
+
+
+# ----------------------------------------------------------------------------
 # Пароль и OAuth (один пользователь — вы)
 # ----------------------------------------------------------------------------
 def check_password(pw: str) -> bool:
@@ -172,6 +250,7 @@ class SingleUserOAuth:
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if STORE.owner:
             audit("REGISTER_REJECTED_OWNER_LOCK", name=client_info.client_name or "")
+            await alert("REGISTER_REJECTED_OWNER_LOCK", client=client_info.client_name or "")
             raise RegistrationError(error="invalid_client_metadata",
                                     error_description="Сервер уже привязан к владельцу. "
                                     "Чтобы привязать заново, запустите PRIVYAZAT_ZANOVO.bat на компьютере.")
@@ -189,6 +268,7 @@ class SingleUserOAuth:
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         if STORE.owner and client.client_id not in STORE.owner:
             audit("AUTHORIZE_REJECTED_OWNER_LOCK", client_id=client.client_id)
+            await alert("AUTHORIZE_REJECTED_OWNER_LOCK", client=client.client_name or client.client_id)
             raise PermissionError("Сервер привязан к другому владельцу")
         req = secrets.token_urlsafe(24)
         STORE.pending[req] = (client.client_id, params, time.time() + 600)
@@ -250,6 +330,8 @@ mcp = MCPServer(
         "Работай только в разрешённых папках (allowed_folders). Папки из read_only_folders не изменяй, "
         "кроме исключений writable_exceptions. "
         "run_command и запись вне белого списка выполняй только по прямой просьбе пользователя."
+        "Если ответ инструмента начинается с «⚠ ВНИМАНИЕ ВЛАДЕЛЬЦУ», сразу сообщи пользователю о попытках "
+        "подключения и покажи подробности инструментом access_attempts. "
     ),
     auth_server_provider=PROVIDER,
     auth=AuthSettings(
@@ -290,10 +372,12 @@ async def login(request: Request) -> Response:
         _login_fail_all[:] = [t for t in _login_fail_all if now - t < 900]
         if len(lst) >= 5 or len(_login_fail_all) >= 30:
             audit("LOGIN_LOCKED", ip=ip)
+            await alert("LOGIN_LOCKED", request)
             return HTMLResponse("<h3>Слишком много неверных попыток. Подождите 15 минут.</h3>", status_code=429)
         pend = STORE.pending.get(req)
         if pend and STORE.owner and pend[0] not in STORE.owner:
             audit("LOGIN_REJECTED_OWNER_LOCK", ip=ip)
+            await alert("LOGIN_REJECTED_OWNER_LOCK", request)
             return HTMLResponse("<h3>Этот сервер уже привязан к владельцу. Доступ запрещён.</h3>", status_code=403)
         if pend and pend[2] > now and check_password(pw):
             client_id, params, _ = STORE.pending.pop(req)
@@ -301,6 +385,7 @@ async def login(request: Request) -> Response:
                 STORE.owner = [client_id]
                 STORE.save()
                 audit("OWNER_BOUND", client_id=client_id)
+                await alert("OWNER_BOUND", request)
             code = secrets.token_urlsafe(32)
             STORE.codes[code] = AuthorizationCode(
                 code=code, scopes=params.scopes or [], expires_at=now + 300, client_id=client_id,
@@ -315,6 +400,7 @@ async def login(request: Request) -> Response:
         lst.append(now)
         _login_fail_all.append(now)
         audit("LOGIN_FAIL", ip=ip)
+        await alert("LOGIN_FAIL", request)
         error = "Неверный пароль или ссылка устарела (начните подключение заново)."
     pend = STORE.pending.get(req)
     client = "неизвестно"
@@ -420,7 +506,8 @@ def tool(fn):
         @functools.wraps(fn)
         async def w(*a, **k):
             try:
-                return await fn(*a, **k)
+                r = await fn(*a, **k)
+                return (unseen_banner() + r) if isinstance(r, str) and fn.__name__ != "access_attempts" else r
             except Exception as e:  # noqa: BLE001
                 audit("TOOL_ERROR", tool=fn.__name__, error=str(e))
                 return f"Ошибка: {e}"
@@ -428,7 +515,8 @@ def tool(fn):
         @functools.wraps(fn)
         def w(*a, **k):
             try:
-                return fn(*a, **k)
+                r = fn(*a, **k)
+                return (unseen_banner() + r) if isinstance(r, str) and fn.__name__ != "access_attempts" else r
             except Exception as e:  # noqa: BLE001
                 audit("TOOL_ERROR", tool=fn.__name__, error=str(e))
                 return f"Ошибка: {e}"
@@ -650,6 +738,24 @@ async def run_command(command: str, cwd: str | None = None, timeout_sec: int = 1
     out = decode_text(r.stdout or b"")
     err = decode_text(r.stderr or b"")
     return page(f"Код выхода: {r.returncode}\n--- вывод ---\n{out}\n--- ошибки ---\n{err}", 0, 50_000)
+
+
+@tool
+def access_attempts(only_new: bool = True, limit: int = 30) -> str:
+    """Журнал попыток подключения к серверу: время, что пытались сделать, IP, страна/город/провайдер, браузер.
+    only_new=True — только непросмотренные (после показа отмечаются как просмотренные)."""
+    allrec = _read_attempts()
+    show = [a for a in allrec if not a.get("seen")] if only_new else allrec
+    if not show:
+        return "Новых попыток подключения нет." if only_new else "Попыток подключения не было."
+    lines = [f"{a['time']} — {a['what']}; IP: {a['ip']}; откуда: {a.get('where') or 'неизвестно'}; "
+             f"браузер: {a.get('browser') or '—'}" + (f"; клиент: {a['client']}" if a.get('client') else "")
+             for a in show[-limit:]]
+    with _attempts_lock:
+        for a in allrec:
+            a["seen"] = True
+        ATTEMPTS_PATH.write_text("".join(json.dumps(a, ensure_ascii=False) + "\n" for a in allrec), encoding="utf-8")
+    return f"Попыток: {len(show)} (показаны последние {min(limit, len(show))}):\n" + "\n".join(lines)
 
 
 # ----------------------------------------------------------------------------

@@ -14,5 +14,6 @@
   "confirm_mode": "chat",
   "confirm_timeout_sec": 60,
   "ngrok_authtoken": "",
-  "allow_commands": false
+  "allow_commands": false,
+  "alert_popup": true
 }
