@@ -53,20 +53,12 @@ def start_ngrok():
                              "--log=stdout"], stdout=out, stderr=out, creationflags=NO_WINDOW)
 
 
-def start_wa():
-    if not CFG.get("whatsapp"):
-        return None
-    py = sys.executable.replace("pythonw.exe", "python.exe")
-    out = open(DATA / "whatsapp.log", "a", encoding="utf-8")
-    return subprocess.Popen([py, str(BASE / "wa_service.py")], cwd=str(BASE), stdout=out, stderr=out,
-                            creationflags=NO_WINDOW)
 
 
 def main():
     (DATA / "launcher.pid").write_text(str(os.getpid()))
     say("старт")
-    srv, ng, wa = start_server(), start_ngrok(), start_wa()
-    wa_next = 0
+    srv, ng = start_server(), start_ngrok()
     try:
         while True:
             time.sleep(10)
@@ -80,14 +72,8 @@ def main():
                 say(f"ngrok остановился (код {ng.returncode}), перезапуск")
                 time.sleep(15)
                 ng = start_ngrok()
-            if wa is not None and wa.poll() is not None:
-                if not wa_next:
-                    say(f"whatsapp остановился (код {wa.returncode}), перезапуск через 2 мин")
-                    wa_next = time.time() + 120
-                elif time.time() >= wa_next:
-                    wa, wa_next = start_wa(), 0
     finally:
-        for p in (srv, ng, wa):
+        for p in (srv, ng):
             if p and p.poll() is None:
                 p.terminate()
         (DATA / "STOP").unlink(missing_ok=True)

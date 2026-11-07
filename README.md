@@ -14,7 +14,6 @@
 - **Read anything useful:** text, Excel, Word, PDF, DBF, zip listings; large files in chunks.
 - **Safe by default:** password login (OAuth, hashed), folder whitelist, read-only folders, automatic backups before overwrite, no delete tool, action log.
 - **Confirm from your phone:** commands and writes ask for approval in the Claude chat.
-- **Optional:** read-only WhatsApp integration (unofficial, use at your own risk).
 
 Quick start (Windows): install Python 3.12+, create a free ngrok account with a static domain, download this repo, run `1_ustanovka.bat`, then `2_zapusk.bat`, and add `https://<your-domain>/mcp` as a custom connector in Claude. Detailed instructions below are in Russian.
 
@@ -42,7 +41,6 @@ Claude (облако) → https://ваш-адрес.ngrok-free.dev/mcp → ту�
 | `search_files` | ищет файлы по маске (`*.xlsx`, `*Талас*`) и по тексту внутри |
 | `write_file` | записывает файл; если файл уже есть, сначала делает резервную копию |
 | `run_command` | выполняет команду или скрипт Python, **только после вашей кнопки «Разрешить» в чате** |
-| `wa_status`, `wa_messages`, `wa_files` | WhatsApp (по желанию, `WHATSAPP_PODKLYUCHIT.bat`): только чтение сообщений и скачанных файлов, без отправки. Подключение неофициальное (как связанное устройство) — есть риск блокировки номера |
 
 
 ## Защита

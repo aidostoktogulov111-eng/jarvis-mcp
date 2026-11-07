@@ -88,8 +88,6 @@ def load_config() -> dict[str, Any]:
 CFG = load_config()
 DATA_DIR = Path(CFG["data_dir"])
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-WA_DIR = DATA_DIR / "wa"
-CFG["allowed_folders"].append(str(WA_DIR / "files"))  # скачанные из WhatsApp файлы — только чтение
 
 # ----------------------------------------------------------------------------
 # Журнал
@@ -618,89 +616,6 @@ async def run_command(command: str, cwd: str | None = None, timeout_sec: int = 1
     out = decode_text(r.stdout or b"")
     err = decode_text(r.stderr or b"")
     return page(f"Код выхода: {r.returncode}\n--- вывод ---\n{out}\n--- ошибки ---\n{err}", 0, 50_000)
-
-
-# ----------------------------------------------------------------------------
-# Инструменты: WhatsApp (только чтение)
-# ----------------------------------------------------------------------------
-def _wa_records(days: float) -> list[dict]:
-    p = WA_DIR / "messages.jsonl"
-    if not p.exists():
-        return []
-    since = datetime.fromtimestamp(time.time() - days * 86400).strftime("%Y-%m-%d %H:%M:%S")
-    out = []
-    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            r = json.loads(line)
-        except ValueError:
-            continue
-        if r.get("time", "") >= since:
-            out.append(r)
-    return out
-
-
-@tool
-def wa_status() -> str:
-    """Состояние подключения WhatsApp (подключён / нужен QR-код / вышел из аккаунта)."""
-    p = WA_DIR / "status.json"
-    if not p.exists():
-        return "WhatsApp-модуль ещё не запускался."
-    d = json.loads(p.read_text(encoding="utf-8"))
-    st = d.get("state")
-    hint = {
-        "need_qr": "Нужно подключить: на ноутбуке открыт QR-код — отсканируйте его телефоном в WhatsApp → "
-                   "Связанные устройства → Привязка устройства.",
-        "connected": "WhatsApp подключён, новые сообщения и файлы сохраняются.",
-        "logged_out": "Устройство отвязано от WhatsApp. Перезапустите модуль и отсканируйте QR заново.",
-    }.get(st, "")
-    return f"Состояние: {st} (на {d.get('time')}). {hint}"
-
-
-@tool
-def wa_messages(days: float = 1, contains: str = "", sender: str = "", only_files: bool = False,
-                limit: int = 60) -> str:
-    """Входящие сообщения WhatsApp за последние days суток (новые сверху).
-    contains — слово в тексте или имени файла; sender — часть имени или номера отправителя;
-    only_files — только сообщения с файлами. У файла указан путь на ПК — его можно открыть read_file.
-    WhatsApp сохраняет только сообщения, пришедшие после подключения модуля."""
-    audit("wa_messages", days=days, contains=contains, sender=sender)
-    rs = _wa_records(days)
-    c, sd = contains.lower(), sender.lower()
-    res = []
-    for r in reversed(rs):
-        if only_files and not r.get("file") and not r.get("file_error"):
-            continue
-        hay = (r.get("text", "") + " " + r.get("file_name", "")).lower()
-        who = f"{r.get('name', '')} {r.get('sender', '')} {r.get('chat', '')}".lower()
-        if c and c not in hay or sd and sd not in who:
-            continue
-        line = f"{r['time']}  {'(группа) ' if r.get('group') else ''}{'я' if r.get('from_me') else r.get('name') or r.get('sender')}" \
-               f" [+{r.get('sender')}]: {r.get('kind')}"
-        if r.get("text"):
-            line += f" — {r['text'][:300]}"
-        if r.get("file"):
-            line += f"\n    файл: {r['file']}"
-        if r.get("file_error"):
-            line += f"\n    {r['file_error']}"
-        res.append(line)
-        if len(res) >= limit:
-            break
-    return "\n".join(res) or "Ничего не найдено за этот период."
-
-
-@tool
-def wa_files(days: float = 7) -> str:
-    """Файлы, скачанные из WhatsApp за последние days суток: путь, размер, от кого (по имени файла)."""
-    audit("wa_files", days=days)
-    root = WA_DIR / "files"
-    if not root.exists():
-        return "Файлов пока нет."
-    lim = time.time() - days * 86400
-    out = []
-    for p in sorted(root.rglob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
-        if p.is_file() and p.stat().st_mtime >= lim:
-            out.append(f"{datetime.fromtimestamp(p.stat().st_mtime):%d.%m %H:%M}  {p.stat().st_size // 1024} КБ  {p}")
-    return "\n".join(out[:200]) or "За этот период файлов нет."
 
 
 # ----------------------------------------------------------------------------
