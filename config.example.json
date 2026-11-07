@@ -1,0 +1,17 @@
+{
+  "public_url": "https://YOUR-DOMAIN.ngrok-free.dev",
+  "allowed_folders": [
+    "C:\\Users\\USERNAME\\Documents"
+  ],
+  "ngrok_domain": "YOUR-DOMAIN.ngrok-free.dev",
+  "port": 8765,
+  "password_salt": "",
+  "password_hash": "",
+  "password_iter": 300000,
+  "read_only_folders": [],
+  "writable_exceptions": [],
+  "backup_dir": "C:\\Jarvis\\backups",
+  "confirm_mode": "chat",
+  "confirm_timeout_sec": 60,
+  "ngrok_authtoken": ""
+}

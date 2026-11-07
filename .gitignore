@@ -1,0 +1,10 @@
+config.json
+data/
+logs/
+backups/
+wawheels/
+__pycache__/
+*.log
+*.pid
+.venv/
+venv/
