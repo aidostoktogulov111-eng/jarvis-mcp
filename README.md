@@ -14,6 +14,7 @@
 - **Read anything useful:** text, Excel, Word, PDF, DBF, zip listings; large files in chunks.
 - **Safe by default:** password login (OAuth, hashed), folder whitelist, read-only folders, automatic backups before overwrite, no delete tool, action log.
 - **Confirm from your phone:** commands and writes ask for approval in the Claude chat.
+- **Built for your phone:** you don't need to sit at the computer — leave it on, and from your phone (chat or voice) tell Claude to find a file, read a document, make a spreadsheet or run a script on your PC.
 
 Quick start (Windows): install Python 3.12+, create a free ngrok account with a static domain, download this repo, run `1_ustanovka.bat`, then `2_zapusk.bat`, and add `https://<your-domain>/mcp` as a custom connector in Claude. Detailed instructions below are in Russian.
 
@@ -26,6 +27,8 @@ Quick start (Windows): install Python 3.12+, create a free ngrok account with a 
 ```
 Claude (облако) → https://ваш-адрес.ngrok-free.dev/mcp → туннель ngrok → сервер на вашем ПК → ваши папки
 ```
+
+**Удобнее всего — с телефона.** Не нужно сидеть за компьютером: оставьте его включённым и командуйте с телефона, в чате или голосом. Например: «найди на компьютере проект и прочитай его», «сделай таблицу и сохрани в папку», «запусти скрипт». Claude сделает это на вашем ПК, а результат покажет в телефоне.
 
 **Компьютер должен быть включён**, а Windows должна быть открыта под вашим пользователем.
 
