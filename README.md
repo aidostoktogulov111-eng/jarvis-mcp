@@ -106,3 +106,7 @@ Claude (облако) → https://ваш-адрес.ngrok-free.dev/mcp → ту�
 ## Безопасность репозитория
 
 `config.json` (пароль, токен ngrok) и папка `data\` (выданные доступы) **не загружаются на GitHub** — они в `.gitignore`. Шаблон настроек — `config.example.json`. Никогда не выкладывайте свой `config.json`.
+
+## Контакты
+
+Вопросы и предложения: **aidostoktogulov111@gmail.com**
